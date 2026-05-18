@@ -1,0 +1,162 @@
+{
+  "name": "Recommend Available Movies",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "REDACTED_WEBHOOK_PATH",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "g1b2c3d4-1111-1111-1111-111111111111",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        304
+      ],
+      "webhookId": "REDACTED_WEBHOOK_ID"
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "AIRTABLE_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "AIRTABLE_TABLE_ID",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "g1b2c3d4-2222-2222-2222-222222222222",
+      "name": "Airtable - List Subscriptions",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        240,
+        304
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REDACTED_CREDENTIAL_ID",
+          "name": "Airtable Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Active subscriptions come from the Airtable node's output (items here)\nconst activeProviders = items\n  .map(it => it.json.fields ?? it.json)\n  .filter(f => f.Active === true && f.Provider)\n  .map(f => f.Provider);\n\n// Webhook body is upstream of the Airtable node \u2014 access it via $('Webhook')\nconst webhookJson = $('Webhook').first().json ?? {};\nconst body = webhookJson.body ?? webhookJson ?? {};\nconst limit = Number(body.limit) || 5;\n\nif (activeProviders.length === 0) {\n  return [{\n    json: {\n      payload: null,\n      error: 'no_active_subscriptions',\n      message: 'No subscriptions marked Active=true in Airtable.'\n    }\n  }];\n}\n\nconst statement = `\nMERGE (u:User {name: 'USER_NAME'})\nWITH u\nOPTIONAL MATCH (u)-[r:WATCHED]->(liked:Movie)\nWHERE r.liked = true AND liked.embedding IS NOT NULL\nWITH u, collect(liked.embedding) AS liked_embeddings\nWITH u, liked_embeddings,\n  CASE WHEN size(liked_embeddings) > 0 THEN\n    [i IN range(0, size(liked_embeddings[0])-1) |\n       reduce(s = 0.0, e IN liked_embeddings | s + e[i]) / toFloat(size(liked_embeddings))\n    ]\n  ELSE null\n  END AS taste_vector\nMATCH (m:Movie)-[:AVAILABLE_ON {type: 'flatrate', country: 'DK'}]->(p:Provider)\nWHERE any(sub IN $active_providers WHERE\n        toLower(p.name) = toLower(sub)\n        OR toLower(p.name) CONTAINS toLower(sub))\n  AND NOT EXISTS { (u)-[:WATCHED]->(m) }\n  AND m.embedding IS NOT NULL\n  AND size(m.embedding) > 0\nWITH m, taste_vector, collect(DISTINCT p.name) AS providers\nWITH m, providers, taste_vector,\n  CASE\n    WHEN taste_vector IS NULL THEN coalesce(m.vote_average, 0) / 10.0\n    ELSE\n      reduce(dot = 0.0, i IN range(0, size(taste_vector)-1) | dot + taste_vector[i] * m.embedding[i])\n      /\n      (\n        sqrt(reduce(s = 0.0, v IN taste_vector | s + v*v)) *\n        sqrt(reduce(s = 0.0, v IN m.embedding   | s + v*v))\n      )\n  END AS score\nORDER BY score DESC\nLIMIT $limit\nRETURN m.title         AS title,\n       m.overview      AS summary,\n       m.vote_average  AS tmdb_rating,\n       m.runtime       AS runtime,\n       m.actors        AS actors,\n       score,\n       providers,\n       taste_vector IS NOT NULL AS personalized\n`;\n\nreturn [{\n  json: {\n    payload: {\n      statements: [{\n        statement,\n        parameters: {\n          active_providers: activeProviders,\n          limit\n        }\n      }]\n    },\n    debug: { active_providers: activeProviders, limit }\n  }\n}];"
+      },
+      "id": "g1b2c3d4-3333-3333-3333-333333333333",
+      "name": "Build Cypher",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://NEO4J_HOST:7474/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json[\"payload\"]}}",
+        "options": {}
+      },
+      "id": "g1b2c3d4-4444-4444-4444-444444444444",
+      "name": "Execute Neo4j Transaction",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        720,
+        304
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REDACTED_CREDENTIAL_ID",
+          "name": "Neo4j Basic Auth Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// If Build Cypher short-circuited (no active subs), return the error early\nconst upstream = $('Build Cypher').first().json;\nif (upstream && upstream.error) {\n  return [{ json: { ok: false, error: upstream.error, message: upstream.message, recommendations: [] } }];\n}\n\nconst resp = items[0]?.json;\n\n// Surface Neo4j errors instead of silently returning empty\nif (resp?.errors && resp.errors.length > 0) {\n  return [{\n    json: {\n      ok: false,\n      error: 'neo4j_error',\n      neo4j_errors: resp.errors,\n      recommendations: []\n    }\n  }];\n}\n\nconst r = resp?.results?.[0];\nif (!r || !r.data?.length) {\n  return [{\n    json: {\n      ok: true,\n      recommendations: [],\n      message: 'No recommendations matched the active subscriptions. Check that movie ingest ran and that provider names align.'\n    }\n  }];\n}\nconst cols = r.columns;\nconst recs = r.data.map(row => Object.fromEntries(cols.map((c, i) => [c, row.row[i]])));\nreturn [{ json: { ok: true, recommendations: recs } }];"
+      },
+      "id": "g1b2c3d4-5555-5555-5555-555555555555",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        304
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Airtable - List Subscriptions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - List Subscriptions": {
+      "main": [
+        [
+          {
+            "node": "Build Cypher",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Cypher": {
+      "main": [
+        [
+          {
+            "node": "Execute Neo4j Transaction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Neo4j Transaction": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true,
+    "timeSavedMode": "fixed"
+  },
+  "meta": {
+    "instanceId": "REDACTED_INSTANCE_ID"
+  },
+  "tags": []
+}
