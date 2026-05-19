@@ -1,0 +1,123 @@
+{
+  "name": "Log Watched Movie",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "movie-log",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "e1b2c3d4-1111-1111-1111-111111111111",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        304
+      ],
+      "webhookId": "WEBHOOK_ID"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Webhook payload lands under $json.body; fall back to $json for in-UI testing\nconst data = $json.body ?? $json;\n\nconst today = new Date().toISOString().slice(0, 10);\n\nconst movieTitle   = (data.movie_title || '').trim();\nconst ratingRaw    = data.rating;\nconst likedRaw     = data.liked;\nconst incrementRaw = data.increment;\n\nconst rating    = (ratingRaw === '' || ratingRaw == null) ? null : Number(ratingRaw);\nconst liked     = likedRaw === 'yes' ? true : (likedRaw === 'no' ? false : null);\nconst increment = Number(incrementRaw) || 1;\n\nconst statement = `\nMERGE (u:User {name: $user})\nWITH u\nMATCH (m:Movie)\nWHERE toLower(m.title) = toLower($movie_title)\n   OR toLower(m.title) CONTAINS toLower($movie_title)\nWITH u, m\nORDER BY\n  CASE WHEN toLower(m.title) = toLower($movie_title) THEN 0 ELSE 1 END,\n  m.title\nLIMIT 1\nMERGE (u)-[r:WATCHED]->(m)\nSET r.times_watched = coalesce(r.times_watched, 0) + $increment,\n    r.last_watched  = $today\nFOREACH (_ IN CASE WHEN $rating IS NOT NULL THEN [1] ELSE [] END | SET r.rating = $rating)\nFOREACH (_ IN CASE WHEN $liked  IS NOT NULL THEN [1] ELSE [] END | SET r.liked  = $liked)\nRETURN m.title         AS movie,\n       r.times_watched AS times_watched,\n       r.rating        AS rating,\n       r.liked         AS liked,\n       r.last_watched  AS last_watched\n`;\n\nreturn [{\n  json: {\n    payload: {\n      statements: [{\n        statement,\n        parameters: {\n          user: 'USER_NAME',\n          movie_title: movieTitle,\n          rating,\n          liked,\n          increment,\n          today\n        }\n      }]\n    }\n  }\n}];"
+      },
+      "id": "e1b2c3d4-2222-2222-2222-222222222222",
+      "name": "Build Cypher Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://NEO4J_HOST:7474/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json[\"payload\"]}}",
+        "options": {}
+      },
+      "id": "e1b2c3d4-3333-3333-3333-333333333333",
+      "name": "Execute Neo4j Transaction",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        480,
+        304
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "NEO4J_CREDENTIAL_ID",
+          "name": "Neo4j Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract the single movie row from the Neo4j tx/commit response\nconst r = items[0]?.json?.results?.[0];\nif (!r || !r.data?.length) {\n  return [{ json: { ok: false, error: 'No matching movie found' } }];\n}\nconst cols = r.columns;\nconst row = r.data[0].row;\nconst out = Object.fromEntries(cols.map((c, i) => [c, row[i]]));\nreturn [{ json: { ok: true, ...out } }];"
+      },
+      "id": "e1b2c3d4-4444-4444-4444-444444444444",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        304
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build Cypher Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Cypher Params": {
+      "main": [
+        [
+          {
+            "node": "Execute Neo4j Transaction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Neo4j Transaction": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true,
+    "timeSavedMode": "fixed"
+  },
+  "versionId": "VERSION_ID",
+  "meta": {
+    "instanceId": "INSTANCE_ID"
+  },
+  "id": "WORKFLOW_ID",
+  "tags": []
+}
