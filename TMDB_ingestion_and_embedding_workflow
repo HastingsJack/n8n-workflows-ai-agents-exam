@@ -1,0 +1,310 @@
+{
+  "name": "TMDB 300 Movies to Neo4j",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "d1b2c3d4-1111-1111-1111-111111111111",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 15 pages x 20 results = 300 movies\nconst pages = [];\nfor (let i = 1; i <= 15; i++) {\n  pages.push({ json: { page: i } });\n}\nreturn pages;"
+      },
+      "id": "d1b2c3d4-2222-2222-2222-222222222222",
+      "name": "Generate Pages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.themoviedb.org/3/movie/popular",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "language",
+              "value": "en-US"
+            },
+            {
+              "name": "page",
+              "value": "={{ $json.page }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d1b2c3d4-3333-3333-3333-333333333333",
+      "name": "Get Popular Movies",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        448,
+        304
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "TMDB_QUERY_AUTH_ID",
+          "name": "TMDB Query Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "results",
+        "options": {}
+      },
+      "id": "d1b2c3d4-4444-4444-4444-444444444444",
+      "name": "Split Movies",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        672,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "maxItems": 300
+      },
+      "id": "d1b2c3d4-5555-5555-5555-555555555555",
+      "name": "Limit 300",
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        880,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.themoviedb.org/3/movie/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "language",
+              "value": "en-US"
+            },
+            {
+              "name": "append_to_response",
+              "value": "watch/providers,credits"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d1b2c3d4-6666-6666-6666-666666666666",
+      "name": "Get Movie Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1104,
+        304
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "TMDB_QUERY_AUTH_ID",
+          "name": "TMDB Query Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function flattenNames(arr) {\n  return arr?.map(x => typeof x === 'string' ? x : x.name).filter(Boolean) || [];\n}\n\nreturn items.map(item => {\n  const g = { ...item.json };\n\n  // Flatten genres from {id, name} objects to name strings\n  g.genres = flattenNames(g.genres);\n\n  // Extract Denmark watch providers (flatrate/rent/buy)\n  const dk = g['watch/providers']?.results?.DK || {};\n  g.providers = [\n    ...(dk.flatrate || []).map(p => ({ ...p, type: 'flatrate' })),\n    ...(dk.rent     || []).map(p => ({ ...p, type: 'rent'     })),\n    ...(dk.buy      || []).map(p => ({ ...p, type: 'buy'      })),\n  ].map(p => ({\n    provider_id:   p.provider_id,\n    provider_name: p.provider_name,\n    logo_path:     p.logo_path,\n    type:          p.type,\n    country:       'DK',\n  }));\n  delete g['watch/providers'];\n\n  // Extract top 5 cast members (TMDB sorts cast by billing order)\n  const cast = g.credits?.cast || [];\n  g.actors = cast.slice(0, 5).map(c => c.name).filter(Boolean);\n  delete g.credits;\n\n  // Build embedding text for semantic search\n  g.embedding_text = [\n    `Title: ${g.title || ''}`,\n    `Status: ${g.status || ''}`,\n    `Genres: ${g.genres.join(', ')}`,\n    `Language: ${g.original_language || ''}`,\n    `Release: ${g.release_date || ''}`,\n    `Runtime: ${g.runtime || ''} min`,\n    `Overview: ${g.overview || ''}`\n  ].join(' ')\n    .replace(/\\n+/g, ' ')\n    .replace(/\\\\/g, '\\\\\\\\')\n    .replace(/\"/g, '\\\\\"')\n    .trim();\n\n  // Keep original for merge step\n  g.original = { ...g };\n\n  // Remove null/empty fields\n  for (const key of Object.keys(g)) {\n    const v = g[key];\n    if (v === null || v === undefined || v === '' ||\n        (Array.isArray(v) && v.length === 0)) {\n      delete g[key];\n    }\n  }\n\n  return { json: g };\n});"
+      },
+      "id": "d1b2c3d4-7777-7777-7777-777777777777",
+      "name": "Movie Metadata Formatter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://OLLAMA_HOST:11434/api/embeddings",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"nomic-embed-text\",\n  \"prompt\": \"{{$json.embedding_text}}\"\n}",
+        "options": {}
+      },
+      "id": "d1b2c3d4-8888-8888-8888-888888888888",
+      "name": "Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1552,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalMovies = $items('Movie Metadata Formatter');\nconst embeddings = items;\n\nconst movies = embeddings.map((embItem, i) => {\n  const orig = originalMovies[i]?.json?.original || originalMovies[i]?.json || {};\n  return {\n    id:                orig.id,\n    title:             orig.title             || '',\n    status:            orig.status            || '',\n    overview:          orig.overview          || '',\n    release_date:      orig.release_date      || '',\n    runtime:           orig.runtime           || 0,\n    original_language: orig.original_language || '',\n    vote_average:      orig.vote_average      || 0,\n    genres:            (orig.genres || []).map(x => String(x).trim()),\n    providers:         orig.providers || [],\n    actors:            orig.actors || [],\n    embedding:         embItem.json.embedding || []\n  };\n}).filter(m => m.id);\n\nconst statement = `\nUNWIND $movies AS movie\nMERGE (m:Movie {tmdb_id: movie.id})\nSET m.title             = movie.title,\n    m.status            = movie.status,\n    m.overview          = movie.overview,\n    m.release_date      = movie.release_date,\n    m.runtime           = movie.runtime,\n    m.original_language = movie.original_language,\n    m.vote_average      = movie.vote_average,\n    m.actors            = movie.actors,\n    m.embedding         = movie.embedding\nFOREACH (genreName IN CASE WHEN movie.genres IS NULL THEN [] ELSE movie.genres END |\n  MERGE (g:Genre {name: genreName})\n  MERGE (m)-[:IN_GENRE]->(g)\n)\nFOREACH (prov IN CASE WHEN movie.providers IS NULL THEN [] ELSE movie.providers END |\n  MERGE (p:Provider {tmdb_id: prov.provider_id})\n  SET p.name = prov.provider_name,\n      p.logo_path = prov.logo_path\n  MERGE (m)-[:AVAILABLE_ON {type: prov.type, country: prov.country}]->(p)\n)\n`;\n\nreturn [{\n  json: {\n    payload: {\n      statements: [{ statement, parameters: { movies } }]\n    }\n  }\n}];"
+      },
+      "id": "d1b2c3d4-9999-9999-9999-999999999999",
+      "name": "Merge Embeddings with Movie Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://NEO4J_HOST:7474/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json[\"payload\"]}}",
+        "options": {}
+      },
+      "id": "d1b2c3d4-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "name": "Execute Neo4j Transaction",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1984,
+        304
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "NEO4J_CREDENTIAL_ID",
+          "name": "Neo4j Credential"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Generate Pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Pages": {
+      "main": [
+        [
+          {
+            "node": "Get Popular Movies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Popular Movies": {
+      "main": [
+        [
+          {
+            "node": "Split Movies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Movies": {
+      "main": [
+        [
+          {
+            "node": "Limit 300",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit 300": {
+      "main": [
+        [
+          {
+            "node": "Get Movie Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Movie Details": {
+      "main": [
+        [
+          {
+            "node": "Movie Metadata Formatter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Movie Metadata Formatter": {
+      "main": [
+        [
+          {
+            "node": "Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embedding": {
+      "main": [
+        [
+          {
+            "node": "Merge Embeddings with Movie Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Embeddings with Movie Data": {
+      "main": [
+        [
+          {
+            "node": "Execute Neo4j Transaction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "VERSION_ID",
+  "meta": {
+    "instanceId": "INSTANCE_ID"
+  },
+  "id": "WORKFLOW_ID",
+  "tags": []
+}
