@@ -1,0 +1,103 @@
+{
+  "name": "Get Subscriptions",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "subscriptions-api",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "f1b2c3d4-1111-1111-1111-111111111111",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        304
+      ],
+      "webhookId": "WEBHOOK_ID"
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "AIRTABLE_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "AIRTABLE_TABLE_ID",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "f1b2c3d4-2222-2222-2222-222222222222",
+      "name": "Airtable - List Subscriptions",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        240,
+        304
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const subs = items.map(item => {\n  const f = item.json.fields ?? item.json;\n  return {\n    Provider: f.Provider ?? null,\n    Active:   f.Active === true,\n    Price:    f.Price ?? null\n  };\n}).filter(s => s.Provider);\n\nreturn [{\n  json: {\n    subscriptions:    subs,\n    active_providers: subs.filter(s => s.Active).map(s => s.Provider)\n  }\n}];"
+      },
+      "id": "f1b2c3d4-3333-3333-3333-333333333333",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        304
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Airtable - List Subscriptions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - List Subscriptions": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true,
+    "timeSavedMode": "fixed"
+  },
+  "versionId": "VERSION_ID",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "INSTANCE_ID"
+  },
+  "id": "WORKFLOW_ID",
+  "tags": []
+}
